@@ -1,11 +1,14 @@
 <?php
-require_once 'db.php';
-require_once 'functions.php';
+require_once 'autoload.php';
 
-// Prevent back button access after login
-session_start();
-if (isset($_SESSION['user_id'])) {
-    header('Location: ' . ($_SESSION['role'] === 'admin' ? 'admin_dashboard.php' : 'user_dashboard.php'));
+$database = new Database();
+$session = new Session();
+$user = new User($database->getConnection());
+$auth = new Auth($user, $session);
+
+if ($auth->isLoggedIn()) {
+    $role = $auth->getCurrentUserRole();
+    header('Location: ' . ($role === 'admin' ? 'admin_dashboard.php' : 'user_dashboard.php'));
     exit();
 }
 
@@ -14,58 +17,43 @@ $success = false;
 
 // Handle form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // Store all form inputs in PHP variables
-    $firstName = sanitizeInput($_POST['first_name'] ?? '');
-    $lastName = sanitizeInput($_POST['last_name'] ?? '');
-    $email = sanitizeInput($_POST['email'] ?? '');
+    $firstName = Validator::sanitizeInput($_POST['first_name'] ?? '');
+    $lastName = Validator::sanitizeInput($_POST['last_name'] ?? '');
+    $email = Validator::sanitizeInput($_POST['email'] ?? '');
     $password = $_POST['password'] ?? '';
     $confirmPassword = $_POST['confirm_password'] ?? '';
-    $gender = sanitizeInput($_POST['gender'] ?? '');
-    $role = 'user'; // Force role to user for registration
-    $address = sanitizeInput($_POST['address'] ?? '');
+    $gender = Validator::sanitizeInput($_POST['gender'] ?? '');
+    $role = 'user';
+    $address = Validator::sanitizeInput($_POST['address'] ?? '');
     
-    // Validate all inputs
-    if (empty($firstName)) {
-        $errors[] = "First name is required.";
+    $errors[] = Validator::validateRequired('first_name', $firstName, 'First name');
+    $errors[] = Validator::validateRequired('last_name', $lastName, 'Last name');
+    $errors[] = Validator::validateRequired('email', $email, 'Email');
+    if (empty($errors[count($errors) - 1])) {
+        $errors[count($errors) - 1] = Validator::validateEmailFormat($email);
+        if (empty($errors[count($errors) - 1]) && $user->emailExists($email)) {
+            $errors[count($errors) - 1] = "Email already exists.";
+        }
     }
     
-    if (empty($lastName)) {
-        $errors[] = "Last name is required.";
+    $errors[] = Validator::validateRequired('password', $password, 'Password');
+    if (empty($errors[count($errors) - 1])) {
+        $errors[count($errors) - 1] = Validator::validatePasswordStrength($password);
     }
     
-    if (empty($email)) {
-        $errors[] = "Email is required.";
-    } elseif (!validateEmail($email)) {
-        $errors[] = "Email format is invalid.";
-    } elseif (userExists($email, $conn)) {
-        $errors[] = "Email already exists.";
+    $errors[] = Validator::validateRequired('confirm_password', $confirmPassword, 'Confirm password');
+    if (empty($errors[count($errors) - 1])) {
+        $errors[count($errors) - 1] = Validator::validatePasswordMatch($password, $confirmPassword);
     }
     
-    if (empty($password)) {
-        $errors[] = "Password is required.";
-    } elseif (!validatePassword($password)) {
-        $errors[] = "Password must be at least 8 characters.";
-    }
+    $errors[] = Validator::validateGender($gender);
+    $errors[] = Validator::validateRole($role);
     
-    if (empty($confirmPassword)) {
-        $errors[] = "Confirm password is required.";
-    } elseif ($password !== $confirmPassword) {
-        $errors[] = "Password and Confirm Password must match.";
-    }
+    $errors = array_filter($errors);
     
-    if (empty($gender)) {
-        $errors[] = "Gender is required.";
-    }
-    
-    if (empty($role)) {
-        $errors[] = "Role is required.";
-    }
-    
-    // If no errors, register user
     if (empty($errors)) {
-        if (registerUser($firstName, $lastName, $email, $password, $gender, $role, $address, $conn)) {
+        if ($user->register($firstName, $lastName, $email, $password, $gender, $role, $address)) {
             $success = true;
-            // Clear form fields
             $firstName = $lastName = $email = $password = $confirmPassword = $gender = $role = $address = '';
         } else {
             $errors[] = "Registration failed. Please try again.";
@@ -116,7 +104,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </div>
             <?php endif; ?>
             
-            <?php displayErrors($errors); ?>
+            <?php 
+            if (!empty($errors)) {
+                echo '<div class="alert alert-danger shadow-sm">';
+                foreach ($errors as $error) {
+                    echo '<div><i class="bi bi-exclamation-circle-fill me-2"></i>' . htmlspecialchars($error) . '</div>';
+                }
+                echo '</div>';
+            }
+            ?>
             
             <form method="POST" action="">
                 <div class="row">

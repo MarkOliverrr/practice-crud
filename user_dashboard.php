@@ -1,76 +1,62 @@
 <?php
-require_once 'db.php';
-require_once 'functions.php';
+require_once 'autoload.php';
 
-// Start session and check if user is logged in
-session_start();
-protectPage();
+$database = new Database();
+$session = new Session();
+$user = new User($database->getConnection());
+$auth = new Auth($user, $session);
 
-// Prevent back button access
-header('Cache-Control: no-cache, no-store, must-revalidate');
-header('Pragma: no-cache');
-header('Expires: 0');
+$auth->protectPage();
 
-// Redirect admin to admin dashboard
-if ($_SESSION['role'] === 'admin') {
+if ($auth->getCurrentUserRole() === 'admin') {
     header('Location: admin_dashboard.php');
     exit();
 }
 
+header('Cache-Control: no-cache, no-store, must-revalidate');
+header('Pragma: no-cache');
+header('Expires: 0');
+
 $errors = [];
 $success = '';
 
-// Get current user data
-$currentUser = getUserById($_SESSION['user_id'], $conn);
+$currentUser = $user->getById($auth->getCurrentUserId());
 
 // Handle profile update
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     
     if ($action === 'update_profile') {
-        // Store form inputs in PHP variables
-        $firstName = sanitizeInput($_POST['first_name'] ?? '');
-        $lastName = sanitizeInput($_POST['last_name'] ?? '');
-        $email = sanitizeInput($_POST['email'] ?? '');
-        $gender = sanitizeInput($_POST['gender'] ?? '');
+        $firstName = Validator::sanitizeInput($_POST['first_name'] ?? '');
+        $lastName = Validator::sanitizeInput($_POST['last_name'] ?? '');
+        $email = Validator::sanitizeInput($_POST['email'] ?? '');
+        $gender = Validator::sanitizeInput($_POST['gender'] ?? '');
         
-        // Validate all inputs
-        if (empty($firstName)) {
-            $errors[] = "First name is required.";
-        }
-        
-        if (empty($lastName)) {
-            $errors[] = "Last name is required.";
-        }
-        
-        if (empty($email)) {
-            $errors[] = "Email is required.";
-        } elseif (!validateEmail($email)) {
-            $errors[] = "Email format is invalid.";
-        } else {
-            // Check if email exists for another user
-            $stmt = $conn->prepare("SELECT id FROM users WHERE email = ? AND id != ?");
-            $stmt->bind_param("si", $email, $_SESSION['user_id']);
-            $stmt->execute();
-            $result = $stmt->get_result();
-            if ($result->num_rows > 0) {
-                $errors[] = "Email already exists.";
+        $errors[] = Validator::validateRequired('first_name', $firstName, 'First name');
+        $errors[] = Validator::validateRequired('last_name', $lastName, 'Last name');
+        $errors[] = Validator::validateRequired('email', $email, 'Email');
+        if (empty($errors[count($errors) - 1])) {
+            $errors[count($errors) - 1] = Validator::validateEmailFormat($email);
+            if (empty($errors[count($errors) - 1])) {
+                $stmt = $database->prepare("SELECT id FROM users WHERE email = ? AND id != ?");
+                $stmt->bind_param("si", $email, $auth->getCurrentUserId());
+                $stmt->execute();
+                $result = $stmt->get_result();
+                if ($result->num_rows > 0) {
+                    $errors[count($errors) - 1] = "Email already exists.";
+                }
             }
         }
         
-        if (empty($gender)) {
-            $errors[] = "Gender is required.";
-        }
+        $errors[] = Validator::validateGender($gender);
         
-        // If no errors, update profile
+        $errors = array_filter($errors);
+        
         if (empty($errors)) {
-            if (updateUser($_SESSION['user_id'], $firstName, $lastName, $email, $gender, 'user', $conn)) {
+            if ($user->update($auth->getCurrentUserId(), $firstName, $lastName, $email, $gender, 'user')) {
                 $success = "Profile updated successfully.";
-                // Update session name
-                $_SESSION['user_name'] = $firstName . ' ' . $lastName;
-                $_SESSION['email'] = $email;
-                // Refresh user data
-                $currentUser = getUserById($_SESSION['user_id'], $conn);
+                $session->set('user_name', $firstName . ' ' . $lastName);
+                $currentUser = $user->getById($auth->getCurrentUserId());
             } else {
                 $errors[] = "Update failed. Please try again.";
             }
@@ -82,42 +68,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $newPassword = $_POST['new_password'] ?? '';
         $confirmPassword = $_POST['confirm_password'] ?? '';
         
-        // Validate inputs
-        if (empty($currentPassword)) {
-            $errors[] = "Current password is required.";
+        $errors[] = Validator::validateRequired('current_password', $currentPassword, 'Current password');
+        $errors[] = Validator::validateRequired('new_password', $newPassword, 'New password');
+        if (empty($errors[count($errors) - 1])) {
+            $errors[count($errors) - 1] = Validator::validatePasswordStrength($newPassword);
+        }
+        $errors[] = Validator::validateRequired('confirm_password', $confirmPassword, 'Confirm password');
+        if (empty($errors[count($errors) - 1])) {
+            $errors[count($errors) - 1] = Validator::validatePasswordMatch($newPassword, $confirmPassword);
         }
         
-        if (empty($newPassword)) {
-            $errors[] = "New password is required.";
-        } elseif (!validatePassword($newPassword)) {
-            $errors[] = "New password must be at least 8 characters.";
-        }
+        $errors = array_filter($errors);
         
-        if (empty($confirmPassword)) {
-            $errors[] = "Confirm password is required.";
-        } elseif ($newPassword !== $confirmPassword) {
-            $errors[] = "New password and confirm password must match.";
-        }
-        
-        // Verify current password
         if (empty($errors)) {
-            $stmt = $conn->prepare("SELECT password FROM users WHERE id = ?");
-            $stmt->bind_param("i", $_SESSION['user_id']);
+            $stmt = $database->prepare("SELECT password FROM users WHERE id = ?");
+            $stmt->bind_param("i", $auth->getCurrentUserId());
             $stmt->execute();
             $result = $stmt->get_result();
-            $user = $result->fetch_assoc();
+            $userData = $result->fetch_assoc();
             
-            if (!password_verify($currentPassword, $user['password'])) {
+            if (!password_verify($currentPassword, $userData['password'])) {
                 $errors[] = "Current password is incorrect.";
             }
         }
         
-        // Update password if no errors
         if (empty($errors)) {
             $hashedPassword = password_hash($newPassword, PASSWORD_DEFAULT);
-            $stmt = $conn->prepare("UPDATE users SET password = ? WHERE id = ?");
-            $stmt->bind_param("si", $hashedPassword, $_SESSION['user_id']);
-            
+            $stmt = $database->prepare("UPDATE users SET password = ? WHERE id = ?");
+            $stmt->bind_param("si", $hashedPassword, $auth->getCurrentUserId());
             if ($stmt->execute()) {
                 $success = "Password changed successfully.";
             } else {
@@ -250,7 +228,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <div class="alert alert-success"><?= htmlspecialchars($success) ?></div>
                     <?php endif; ?>
                     
-                    <?php displayErrors($errors); ?>
+                    <?php 
+                    if (!empty($errors)) {
+                        echo '<div class="alert alert-danger">';
+                        foreach ($errors as $error) {
+                            echo '<div><i class="bi bi-exclamation-circle-fill me-2"></i>' . htmlspecialchars($error) . '</div>';
+                        }
+                        echo '</div>';
+                    }
+                    ?>
                     
                     <form method="POST">
                         <input type="hidden" name="action" value="update_profile">

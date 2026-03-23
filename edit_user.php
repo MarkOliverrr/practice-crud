@@ -1,80 +1,61 @@
 <?php
-require_once 'db.php';
-require_once 'functions.php';
+require_once 'autoload.php';
 
-// Start session and check if user is logged in
-session_start();
-protectPage();
+$database = new Database();
+$session = new Session();
+$user = new User($database->getConnection());
+$auth = new Auth($user, $session);
 
-// Prevent back button access
+$auth->requireAdmin();
+
 header('Cache-Control: no-cache, no-store, must-revalidate');
 header('Pragma: no-cache');
 header('Expires: 0');
-
-// Check if user is admin
-if ($_SESSION['role'] !== 'admin') {
-    header('Location: user_dashboard.php');
-    exit();
-}
 
 $errors = [];
 $success = '';
 $userId = $_GET['id'] ?? 0;
 
-// Get user data
-$user = getUserById($userId, $conn);
-if (!$user) {
+$userData = $user->getById($userId);
+if (!$userData) {
     header('Location: admin_dashboard.php');
     exit();
 }
 
 // Handle form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // Store form inputs in PHP variables
-    $firstName = sanitizeInput($_POST['first_name'] ?? '');
-    $lastName = sanitizeInput($_POST['last_name'] ?? '');
-    $email = sanitizeInput($_POST['email'] ?? '');
-    $gender = sanitizeInput($_POST['gender'] ?? '');
-    $role = sanitizeInput($_POST['role'] ?? 'user');
+    $firstName = Validator::sanitizeInput($_POST['first_name'] ?? '');
+    $lastName = Validator::sanitizeInput($_POST['last_name'] ?? '');
+    $email = Validator::sanitizeInput($_POST['email'] ?? '');
+    $gender = Validator::sanitizeInput($_POST['gender'] ?? '');
+    $role = Validator::sanitizeInput($_POST['role'] ?? 'user');
     
-    // Validate all inputs
-    if (empty($firstName)) {
-        $errors[] = "First name is required.";
-    }
-    
-    if (empty($lastName)) {
-        $errors[] = "Last name is required.";
-    }
-    
-    if (empty($email)) {
-        $errors[] = "Email is required.";
-    } elseif (!validateEmail($email)) {
-        $errors[] = "Email format is invalid.";
-    } else {
-        // Check if email exists for another user
-        $stmt = $conn->prepare("SELECT id FROM users WHERE email = ? AND id != ?");
-        $stmt->bind_param("si", $email, $userId);
-        $stmt->execute();
-        $result = $stmt->get_result();
-        if ($result->num_rows > 0) {
-            $errors[] = "Email already exists.";
+    $errors[] = Validator::validateRequired('first_name', $firstName, 'First name');
+    $errors[] = Validator::validateRequired('last_name', $lastName, 'Last name');
+    $errors[] = Validator::validateRequired('email', $email, 'Email');
+    if (empty($errors[count($errors) - 1])) {
+        $errors[count($errors) - 1] = Validator::validateEmailFormat($email);
+        if (empty($errors[count($errors) - 1])) {
+            $stmt = $database->prepare("SELECT id FROM users WHERE email = ? AND id != ?");
+            $stmt->bind_param("si", $email, $userId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            if ($result->num_rows > 0) {
+                $errors[count($errors) - 1] = "Email already exists.";
+            }
         }
     }
     
-    if (empty($gender)) {
-        $errors[] = "Gender is required.";
-    }
+    $errors[] = Validator::validateGender($gender);
+    $errors[] = Validator::validateRole($role);
     
-    if (empty($role)) {
-        $errors[] = "Role is required.";
-    }
+    $errors = array_filter($errors);
     
     // If no errors, update user
     if (empty($errors)) {
-        if (updateUser($userId, $firstName, $lastName, $email, $gender, $role, $conn)) {
+        if ($user->update($userId, $firstName, $lastName, $email, $gender, $role)) {
             $success = "User updated successfully.";
-            // Refresh user data
-            $user = getUserById($userId, $conn);
+            $userData = $user->getById($userId);
         } else {
             $errors[] = "Update failed. Please try again.";
         }
@@ -138,7 +119,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </div>
             <?php endif; ?>
             
-            <?php displayErrors($errors); ?>
+            <?php 
+            if (!empty($errors)) {
+                echo '<div class="alert alert-danger">';
+                foreach ($errors as $error) {
+                    echo '<div><i class="bi bi-exclamation-circle-fill me-2"></i>' . htmlspecialchars($error) . '</div>';
+                }
+                echo '</div>';
+            }
+            ?>
             
             <form method="POST" action="">
                 <div class="row">

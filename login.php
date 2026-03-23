@@ -1,11 +1,14 @@
 <?php
-require_once 'db.php';
-require_once 'functions.php';
+require_once 'autoload.php';
 
-// Prevent back button access after login
-session_start();
-if (isset($_SESSION['user_id'])) {
-    header('Location: ' . ($_SESSION['role'] === 'admin' ? 'admin_dashboard.php' : 'user_dashboard.php'));
+$database = new Database();
+$session = new Session();
+$user = new User($database->getConnection());
+$auth = new Auth($user, $session);
+
+if ($auth->isLoggedIn()) {
+    $role = $auth->getCurrentUserRole();
+    header('Location: ' . ($role === 'admin' ? 'admin_dashboard.php' : 'user_dashboard.php'));
     exit();
 }
 
@@ -14,39 +17,26 @@ $email = '';
 
 // Handle form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // Store form inputs in PHP variables
-    $email = sanitizeInput($_POST['email'] ?? '');
+    $email = Validator::sanitizeInput($_POST['email'] ?? '');
     $password = $_POST['password'] ?? '';
     
-    // Validate inputs
-    if (empty($email)) {
-        $errors[] = "Email is required.";
-    } elseif (!validateEmail($email)) {
-        $errors[] = "Email format is invalid.";
+    $errors[] = Validator::validateRequired('email', $email, 'Email');
+    if (empty($errors[count($errors) - 1])) {
+        $errors[count($errors) - 1] = Validator::validateEmailFormat($email);
     }
     
-    if (empty($password)) {
-        $errors[] = "Password is required.";
-    }
+    $errors[] = Validator::validateRequired('password', $password, 'Password');
     
-    // If no validation errors, authenticate user
+    $errors = array_filter($errors);
+    
     if (empty($errors)) {
-        $authResult = authenticateUser($email, $password, $conn);
+        $loginResult = $auth->login($email, $password);
         
-        if ($authResult['success']) {
-            // Start session upon successful login
-            session_start();
-            
-            // Store session variables
-            $_SESSION['user_id'] = $authResult['user']['id'];
-            $_SESSION['user_name'] = $authResult['user']['first_name'] . ' ' . $authResult['user']['last_name'];
-            $_SESSION['role'] = $authResult['user']['role'];
-            $_SESSION['email'] = $authResult['user']['email'];
-            
-            // Redirect based on role
-            redirectBasedOnRole($authResult['user']['role']);
+        if ($loginResult['success']) {
+            header('Location: ' . $loginResult['redirect']);
+            exit();
         } else {
-            $errors[] = $authResult['message'];
+            $errors[] = $loginResult['message'];
         }
     }
 }

@@ -1,6 +1,12 @@
 <?php
-require_once 'functions.php';
+require_once 'autoload.php';
 
-// Logout function destroys session and redirects to login
-logout();
+$database = new Database();
+$session = new Session();
+$user = new User($database->getConnection());
+$auth = new Auth($user, $session);
+
+$logoutResult = $auth->logout();
+header('Location: ' . $logoutResult['redirect']);
+exit();
 ?>

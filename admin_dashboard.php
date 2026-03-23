@@ -1,21 +1,16 @@
 <?php
-require_once 'db.php';
-require_once 'functions.php';
+require_once 'autoload.php';
 
-// Start session and check if user is logged in
-session_start();
-protectPage();
+$database = new Database();
+$session = new Session();
+$user = new User($database->getConnection());
+$auth = new Auth($user, $session);
 
-// Prevent back button access
+$auth->requireAdmin();
+
 header('Cache-Control: no-cache, no-store, must-revalidate');
 header('Pragma: no-cache');
 header('Expires: 0');
-
-// Check if user is admin
-if ($_SESSION['role'] !== 'admin') {
-    header('Location: user_dashboard.php');
-    exit();
-}
 
 $errors = [];
 $success = '';
@@ -27,8 +22,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     switch ($action) {
         case 'delete':
             $userId = $_POST['user_id'] ?? 0;
-            if ($userId > 0 && $userId != $_SESSION['user_id']) {
-                if (deleteUser($userId, $conn)) {
+            if ($userId > 0 && $userId != $auth->getCurrentUserId()) {
+                if ($user->delete($userId)) {
                     $success = "User deleted successfully.";
                 } else {
                     $errors[] = "Failed to delete user.";
@@ -41,8 +36,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $currentStatus = $_POST['current_status'] ?? '';
             $newStatus = $currentStatus === 'active' ? 'inactive' : 'active';
             
-            if ($userId > 0 && $userId != $_SESSION['user_id']) {
-                if (toggleUserStatus($userId, $newStatus, $conn)) {
+            if ($userId > 0 && $userId != $auth->getCurrentUserId()) {
+                if ($user->updateStatus($userId, $newStatus)) {
                     $success = "User status updated successfully.";
                 } else {
                     $errors[] = "Failed to update user status.";
@@ -52,13 +47,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-// Handle search
-$searchTerm = sanitizeInput($_GET['search'] ?? '');
-$users = !empty($searchTerm) ? searchUsers($searchTerm, $conn) : getAllUsers($conn);
+$searchTerm = Validator::sanitizeInput($_GET['search'] ?? '');
+$users = !empty($searchTerm) ? $user->search($searchTerm) : $user->getAll();
 
 // Demonstrate different types of loops
 $userCount = count($users);
 $counter = 0;
+
+// Function to display errors
+function displayErrors($errors) {
+    if (!empty($errors)) {
+        echo '<div class="alert alert-danger m-3">';
+        foreach ($errors as $error) {
+            echo htmlspecialchars($error) . '<br>';
+        }
+        echo '</div>';
+    }
+}
 ?>
 
 <!DOCTYPE html>
