@@ -11,13 +11,18 @@ class Database {
     }
     
     private function connect() {
-        $this->conn = new mysqli($this->host, $this->username, $this->password, $this->database);
-        
-        if ($this->conn->connect_error) {
-            die("Connection failed: " . $this->conn->connect_error);
+        try {
+            $dsn = "mysql:host={$this->host};dbname={$this->database};charset=utf8mb4";
+            $options = [
+                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                PDO::ATTR_EMULATE_PREPARES => false,
+            ];
+            
+            $this->conn = new PDO($dsn, $this->username, $this->password, $options);
+        } catch (PDOException $e) {
+            die("Connection failed: " . $e->getMessage());
         }
-        
-        $this->conn->set_charset("utf8");
     }
     
     public function getConnection() {
@@ -28,10 +33,16 @@ class Database {
         return $this->conn->prepare($sql);
     }
     
+    public function query($sql) {
+        return $this->conn->query($sql);
+    }
+    
+    public function lastInsertId() {
+        return $this->conn->lastInsertId();
+    }
+    
     public function close() {
-        if ($this->conn) {
-            $this->conn->close();
-        }
+        $this->conn = null;
     }
     
     public function __destruct() {
